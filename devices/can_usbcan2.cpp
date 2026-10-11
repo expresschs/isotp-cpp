@@ -130,7 +130,8 @@ int can_usbcan2::transmit(uint32_t id, const uint8_t *payload, uint8_t len)
     ZCAN_Transmit_Data data;
 
     data.transmit_type = 0;
-    data.frame.can_id = MAKE_CAN_ID(id, 1, 0, 0);//id;
+    /* IDs above 11 bits (0x7FF) must be sent as extended frames. */
+    data.frame.can_id = MAKE_CAN_ID(id, (id > 0x7FF) ? 1 : 0, 0, 0);
     for (int i = 0; i < len; i++) {
         data.frame.data[i] = payload[i];
     }
