@@ -74,7 +74,7 @@ void isotp15765::pollingFunction(void)
     uint8_t data[8];
 
     while (!exitThread) {
-        auto last_receive_status = link.receive_status; /* link state only mutated by this thread */
+        auto prev_recv_status = link.receive_status; /* link state only mutated by this thread */
         if (0 == link.device_receive(&id, data, &dlc, poll_ms)) {
             if (destID == id) {
                 std::unique_lock<std::mutex> lock(mtx);
@@ -92,7 +92,7 @@ void isotp15765::pollingFunction(void)
                 receive_ready = true;
                 receive_cv.notify_one();
             }
-        } else if (ISOTP_RECEIVE_STATUS_INPROGRESS == last_receive_status && ISOTP_RECEIVE_STATUS_IDLE == link.receive_status) {
+        } else if (ISOTP_RECEIVE_STATUS_INPROGRESS == prev_recv_status && ISOTP_RECEIVE_STATUS_IDLE == link.receive_status) {
             std::unique_lock<std::mutex> _lock(receive_mtx);
             receive_result = ISOTP_RET_ERROR;
             receive_ready = true;
@@ -124,11 +124,11 @@ int isotp15765::send(const isotp_message &message, int timeout)
     if (timeout < 0) {
         timeout = std::numeric_limits<int>::max();
     }
+    std::unique_lock<std::mutex> send_lock(send_mtx);
+    send_ready = false;
+    send_lock.unlock();
+
     std::unique_lock<std::mutex> lock(mtx);
-    {
-        std::unique_lock<std::mutex> _lock(send_mtx);
-        send_ready = false;
-    }
     ret = isotp_send_with_id(&link, link.send_arbitration_id, message.data.data(), message.data.size());
     if (ISOTP_RET_OK == ret && message.data.size() >= 8) {
         is_sending_cf = true;
@@ -154,14 +154,9 @@ int isotp15765::receive(isotp_message &message, int timeout)
     if (receive_cv.wait_for(lock, std::chrono::milliseconds(timeout), [this]{ return receive_ready; })) {
         receive_ready = false;
         ret = receive_result;
+        lock.unlock();
         if (ISOTP_RET_OK == ret) {
-            lock.unlock(); /* release receive_mtx before taking mtx, so we never hold both
-                              -> no inversion with polling thread's order (mtx -> receive_mtx) */
             std::unique_lock<std::mutex> _lock(mtx);
-            //message.data.clear();
-            //for (int i = 0; i < receivedPayloadSize; i++) {
-            //    message.data.push_back(receivedPayload[i]);
-            //}
             message.data.assign(receivedPayload, receivedPayload + receivedPayloadSize);
         }
     }
